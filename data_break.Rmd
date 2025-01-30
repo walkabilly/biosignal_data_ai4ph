@@ -1,0 +1,149 @@
+---
+title: "Data Break"
+output:
+      html_document:
+        keep_md: true
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(BiostatsUHNplus)
+library(lubridate)
+library(stringr)
+library(seewave)
+library(signal)
+library(gsignal)
+```
+
+## Data Break
+
+```{r}
+data <- read_csv("data_clean.csv")
+glimpse(data)
+
+### Sort by id and time
+data <- arrange(data, id, time_s)
+data$id <- as.factor(data$id)
+
+### Converting appropriate variables to factor
+data <- data %>% mutate_at(c(2, 5, 6), factor)
+
+### Creating a second level variable
+
+data$time <- gsub("\\..*","", data$time_s)
+```
+
+## Participants
+
+Summary statistics for the participants 
+
+```{r}
+rm_covsum_nested(data = data, id = c("id"), covs = c("gender",
+"age", "weight_lbs", "age", "activity", "lw_x", "lw_y", "lw_z"))
+```
+
+We can see right away that we have strongly imblanced data for the activity. More on that later. 
+
+## Accelerometer signals
+
+First, we want to sort by time and id to make the plotting a bit more efficient. Unfortunately, in this sample dataset we don't get real clock time, only a index variable for the second. Second, we are going to filter out non study activity from the dataset just to make this a bit more manageable. 
+
+__Type of activity__
+
+* 1. Walking
+* 2. Descending stairs
+* 3. Ascending stairs
+* 4. Driving
+* 77. Clapping 
+* 99. Non-study activity
+
+```{r}
+table(data$activity)
+
+data <- dplyr::filter(data, activity != "99") ## Filter out non study activity
+```
+
+## Check frequency
+
+```{r}
+data <- data %>%
+            group_by(time, id) %>%
+              mutate(freq_n = n()) %>%
+              ungroup()
+
+ggplot(data, aes(x = time, y = freq_n)) + 
+        geom_point() + 
+        facet_wrap(~ id) + 
+        theme_minimal()
+```
+
+### X Axis
+
+```{r}
+ggplot(data, aes(x = time_s, y = lw_x, colour = activity)) +
+                  geom_line() + 
+                  facet_wrap(~ id)
+
+ggsave("accel_signal_x.pdf")
+```
+
+### Y Axis
+
+```{r}
+ggplot(data, aes(x = time_s, y = lw_y, colour = activity)) +
+                  geom_line() + 
+                  facet_wrap(~ id)
+
+
+ggsave("accel_signal_y.pdf")
+```
+
+### Z Axis
+
+```{r}
+ggplot(data, aes(x = time_s, y = lw_z, colour = activity)) +
+                  geom_line() + 
+                  facet_wrap(~ id)
+
+ggsave("accel_signal_z.pdf")
+```
+
+## Signal Processing 
+
+Good resource for signal processing here: [https://cran.r-project.org/web/packages/gsignal/vignettes/gsignal.html](https://cran.r-project.org/web/packages/gsignal/vignettes/gsignal.html)
+
+Here we have most of the data an 100Hz but some records are at a lower frequency. We will want to resample those values to create a consistent signal. It's common in the accelerometer space to resample to 30Hz. This will help later on in the analysis and is generally common practice. We can either resample the 
+
+```{r}
+data_30hz <- data %>%
+              summarize(x = signal::resample(lw_x, p = 1, q = 30, d = 5),
+                      y = signal::resample(lw_y, p = 1, q = 30, d = 5),
+                      z = signal::resample(lw_z, p = 1, q = 30, d = 5)
+                      )
+```
+
+## Features
+
+### Time based features
+
+Example code for a number of features available on the BEAP Lab website here [https://github.com/walkabillylab/Smartphone_accelerometers-Pocket_location/blob/master/Misc_codes/feature_generator.R
+](https://github.com/walkabillylab/Smartphone_accelerometers-Pocket_location/blob/master/Misc_codes/feature_generator.R
+)
+
+One of the most common features in accelerometer analysis is the `vector magnitude` or `euclidian norm`. This feature is important because it combines information from the 3 axes. This could be important, in particular in cases where we don't know the orientation of the device. 
+
+```{r}
+data$vec_mag <- sqrt((data$lw_x^2) + (data$lw_y^2) + (data$lw_z^2))
+
+ggplot(data, aes(x = time_s, y = vec_mag, colour = activity)) +
+                  geom_line() + 
+                  facet_wrap(~ id)
+```
+
+### Frequency based features
+
+```{r}
+fft_x <- fft(data$lw_x)
+```
+

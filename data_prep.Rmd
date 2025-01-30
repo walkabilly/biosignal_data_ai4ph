@@ -1,0 +1,101 @@
+---
+title: "ai4ph-biosignal-data-prep"
+author: "Shelby Sturrock"
+date: "2025-01-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(data.table)
+setwd("/Users/dlf545/Dropbox/Teaching/USask/AI4PH/biosignal_data_ai4ph/data")
+```
+
+# 1. Read in data
+
+*read in participant demographics*
+```{r}
+demo<-read.csv("participant_demog.csv")
+```
+
+*generate a list of 15 participants - approximately half male and half female with a range of ages*
+```{r}
+set.seed(124)
+sample<-demo[sample(nrow(demo),10),] %>% dplyr::select(-race,-height_in) %>% rename(id=subj_id)
+```
+
+*Establish list of all participants with accelerometer data*
+```{r}
+  list<-list.files("raw_accelerometry_data", 
+                   full.names=TRUE)
+  list<-list[grepl(".csv",list)]
+  length(list)
+```
+
+*Read in accelerometer data from each of the i number of participants (named data1, data2, ... dataX, where X is equal to i)*
+Note: setting colClasses = 'character' since some a given column may be an integer for some participants but character for others, depending on whether or not they have any missing values
+```{r}
+  for(i in 1:length(unique(list))) { # hash and decrypted date?
+    
+      file<-fread(list[i],fill=TRUE,colClasses = 'character')
+      file$id<-gsub(".csv","",gsub("raw_accelerometry_data/","",list[i]))
+      assign(paste("data_",unique(file$id),sep=""),file)
+      rm(file)
+      i<-i+1
+      
+  }
+```
+
+# 2. Combine accelerometer data
+
+*Combine data for all participants into one dataframe*
+```{r}
+  name<-"data"
+  X<-mget(ls(pattern=name)) %>% bind_rows() %>% arrange(id)
+  rm(list = ls()[grepl(name, ls())])
+  assign(name,X)
+  rm(X)
+  dataOriginal<-data
+```
+
+*Remove hip accelerometer data*
+```{r}
+ data<-data %>% dplyr::select(id,activity,time_s,lw_x,lw_y,lw_z)
+```
+
+# 3. Merge in demographic data
+
+only keep rows where id is in the sample file
+```{r}
+data<-merge(sample,data,by="id",all.x=TRUE)
+```
+
+# 4. Code `activity` as factor
+
+```{r}
+data$activity <- as.factor(data$activity)
+```
+
+
+```{}
+data <- data %>%
+	mutate(activity_cat = case_when(
+		activity == "1" ~ "walking",
+		activity == "2" ~ "descending stairs",
+		activity == "3" ~ "ascending stairs",
+		activity == "4" ~ "driving",	
+		activity == "77" ~ "clapping",	
+		activity == "99" ~ "non-study activity",	
+		TRUE ~ "non-study activity"
+	))
+
+data$activity <- NULL
+```
+
+# 5. Write dataset
+
+```{r}
+write_csv(data, "data_clean.csv")
+```
+
