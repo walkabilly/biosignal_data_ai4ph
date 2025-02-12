@@ -147,3 +147,9 @@ ggplot(data, aes(x = time_s, y = vec_mag, colour = activity)) +
 fft_x <- fft(data$lw_x)
 ```
 
+### Session info
+
+```{r}
+sessionInfo()
+```
+

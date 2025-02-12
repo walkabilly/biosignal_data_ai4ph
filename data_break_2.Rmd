@@ -1,0 +1,224 @@
+---
+title: "Data Break 2"
+output:
+      html_document:
+        keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(BiostatsUHNplus)
+library(lubridate)
+library(stringr)
+library(seewave)
+library(signal)
+library(gsignal)
+library(tidymodels)
+library(parsnip)
+library(zoo)
+```
+
+### Read in data
+
+```{r}
+data <- read_csv("data_clean.csv")
+glimpse(data)
+
+### Sort by id and time
+data <- arrange(data, id, time_s)
+data$id <- as.factor(data$id)
+
+## Filter out non study activity
+data <- dplyr::filter(data, activity != 99)
+
+### Converting appropriate variables to factor
+data <- data %>% mutate_at(c(2, 5, 6), factor)
+
+### Creating a second level variable
+
+data$time <- gsub("\\..*","", data$time_s)
+```
+
+### Feature development
+
+```{r, warning = FALSE}
+### Vector Magnitude
+data$vec_mag <- sqrt((data$lw_x^2) + (data$lw_y^2) + (data$lw_z^2))
+
+### 5 second Moving average of x, y, z
+
+data$roll_mean_x <- rollmean(data$lw_x, 500, fill = mean(data$lw_x))
+data$roll_mean_y <- rollmean(data$lw_y, 500, fill = mean(data$lw_y))
+data$roll_mean_z <- rollmean(data$lw_z, 500, fill = mean(data$lw_z))
+
+### Correlations between x, y, z
+
+data_xyz <- select(data, lw_x, lw_y, lw_z)
+
+### Correlation x y 
+cor(data$lw_x, data$lw_y)
+data$corr_x_y <- rollapply(data_xyz, width=500, function(x) cor(x[, 1], x[, 2]), by.column=FALSE, fill = -0.1848453)
+
+### Correlation y z 
+cor(data$lw_y, data$lw_z)
+data$corr_y_z <- rollapply(data_xyz, width=500, function(x) cor(x[, 2], x[, 3]), by.column=FALSE, fill = -0.2885716)
+
+### Correlation x z 
+cor(data$lw_x, data$lw_z)
+data$corr_x_z <- rollapply(data_xyz, width=500, function(x) cor(x[, 1], x[, 3]), by.column=FALSE, fill = 0.1069972)
+
+#write_csv(data, "data_rf.csv")
+
+rm(data_xyz)
+#rm(data)
+```
+
+### Random Forest 
+
+We will use the Tidymodels framework for model fitting 
+
+#### Data split with 70/30 (Do not recommend)
+
+```{r}
+#data <- read_csv("data_rf.csv")
+#data$activity <- as.factor(data$activity)
+
+# Fix the random numbers by setting the seed 
+# This enables the analysis to be reproducible when random numbers are used 
+set.seed(10)
+
+data <- select(data, id, time_s, gender, age, weight_lbs, activity, lw_x, lw_y, lw_z, vec_mag, roll_mean_x, roll_mean_y, roll_mean_z, corr_x_y, corr_y_z, corr_x_z)
+
+#### Cross Validation Split
+cv_split <- initial_validation_split(data, 
+                            strata = activity, 
+                            prop = c(0.7, 0.2))
+
+# Create data frames for the two sets:
+train_data <- training(cv_split)
+table(train_data$activity)
+
+test_data  <- testing(cv_split)
+table(test_data$activity)
+```
+
+High risk of data leakage with this method. We can do k-fold cross validation to make this less likely and improve the robustness of our models. 
+
+### Model 
+
+Here we use the tidy models to setup a model using `ranger` and `classification` and we call the specific model we want to fit. I'm fixing mtry = 5, min_n = 10, and tress = 10 just to make the model run more efficiently in class. Normally you want to tune these to find the optimal values. This optimization process can take a long time and is best done using parallel processing. 
+
+```{r}
+cores <- parallel::detectCores()
+cores
+```
+
+```{r}
+rf_model <- rand_forest(mtry = 5, min_n = 10, trees = 10) %>% 
+              set_engine("ranger", num.threads = cores) %>% 
+              set_mode("classification")
+```
+
+#### Recipe
+
+The recipe() function as we used it here has two arguments
+
+1. A formula. Any variable on the left-hand side of the tilde (~) is considered the model outcome (here, arr_delay). On the right-hand side of the tilde are the predictors. Variables may be listed by name, or you can use the dot (.) to indicate all other variables as predictors.
+2. The data. A recipe is associated with the data set used to create the model. This will typically be the training set, so data = train_data here. Naming a data set doesn’t actually change the data itself; it is only used to catalog the names of the variables and their types, like factors, integers, dates, etc.
+
+Now we can add roles to this recipe. We can use the update_role() function to let recipes know that `ADM_STUDY_ID` is a variable with a custom role that we called "ID" (a role can have any character value). Whereas our formula included all variables in the training set other than bmi_recode as predictors (that's what the `.` does), this tells the recipe to keep these two variables but not use them as either outcomes or predictors.
+
+```{r}
+activity_recipe <- 
+  recipe(activity ~ ., data = train_data) %>% 
+  update_role(id, new_role = "ID") %>% 
+  update_role(time_s, new_role = "ID") %>%
+  step_zv(all_predictors()) ### Remove columns from the data when the training set data have a single value. Zero variance predictor
+```
+
+#### Create a workflow
+
+A workflow connects our recipe with out model. The workflow let's us setup the models without actually have run things over and over again. This is helpful because as you will sometimes models can take a long time to run. 
+
+```{r}
+activity_workflow <- 
+        workflow() %>% 
+        add_model(rf_model) %>% 
+        add_recipe(activity_recipe)
+
+activity_workflow
+```
+
+### Fit a model 
+
+```{r}
+set.seed(100)
+
+folds <- vfold_cv(train_data, v = 5) ## normally you would do at least 10 folds. Just doing 5 because it's faster.
+
+activity_fit <- 
+      activity_workflow %>% 
+      fit_resamples(resamples = folds,
+                    control = control_resamples(save_pred = TRUE, 
+                                                verbose = FALSE)) ## Edit for running live
+
+activity_fit
+```
+
+### Collect the results
+
+```{r}
+rf_best <- 
+  activity_fit %>% 
+  select_best(metric = "roc_auc")
+
+rf_best
+
+rf_auc_fit <- 
+  activity_fit %>% 
+  collect_predictions(parameters = rf_best) 
+```
+
+### Metrics
+
+#### Confusion Matrix
+
+We can generate a confusion matrix by using the `conf_mat()` function by supplying the data frame (`rf_auc_fit`), the truth column `activity` and predicted class `.pred_class` in the estimate attribute.
+
+A confusion matrix is sort of a 2x2 table with the true values on one side and predicted values in another column. If we look on the diagonal we see when the model correctly predicts the values `yes/no` and off diagonal is when the model does not predict the correct value.
+
+Here is the confusion matrix for one fold. 
+
+```{r}
+cm <- rf_auc_fit %>%
+        dplyr::filter(id == "Fold1") %>%
+        conf_mat(activity, .pred_class)
+cm
+```
+
+Here is the confusion matrix for all 5 of the folds. 
+
+```{r}
+conf_mat(rf_auc_fit, truth = activity,
+         estimate = .pred_class)
+```
+
+#### Accuracy
+
+We can calculate the classification accuracy by using the `accuracy()` function by supplying the final data frame `rf_auc_fit`, the truth column `activity` and predicted class `.pred_class` in the estimate attribute. 
+
+```{r}
+accuracy(rf_auc_fit, truth = activity,
+         estimate = .pred_class)
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
