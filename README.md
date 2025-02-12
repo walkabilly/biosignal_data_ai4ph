@@ -8,6 +8,9 @@ Course description and registration is here (https://ai4ph-hrtp.ca/short-courses
 * Day 1 - Data Break Code 
     * Acutal code [.Rmd](https://github.com/walkabilly/biosignal_data_ai4ph/blob/main/data_break.Rmd)
     * Nice rendered markdwon [here](https://github.com/walkabilly/biosignal_data_ai4ph/blob/main/data_break.md)
+* Day 2 - Data Break Code 
+    * Acutal code [.Rmd](https://github.com/walkabilly/biosignal_data_ai4ph/blob/main/data_break_2.Rmd)
+    * Nice rendered markdwon [here](https://github.com/walkabilly/biosignal_data_ai4ph/blob/main/data_break_2.md)
 
 ## Data wrangling 
 * Code for data wrangling is available [here](https://github.com/walkabilly/biosignal_data_ai4ph/blob/main/data_prep.Rmd)
