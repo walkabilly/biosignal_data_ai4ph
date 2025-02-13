@@ -21,3 +21,4 @@ Course description and registration is here (https://ai4ph-hrtp.ca/short-courses
 
 ## Slides
 * [Day 1 Slides](https://github.com/walkabilly/biosignal_data_ai4ph/blob/main/slides_day_1.pptx)
+* [Day 2 Slides](https://github.com/walkabilly/biosignal_data_ai4ph/blob/main/slides_day_2.pptx)
