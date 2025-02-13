@@ -5,7 +5,7 @@ output:
         keep_md: true
 ---
 
-```{r setup, include=FALSE}
+```{r}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(BiostatsUHNplus)
@@ -17,6 +17,7 @@ library(gsignal)
 library(tidymodels)
 library(parsnip)
 library(zoo)
+library(ranger)
 ```
 
 ### Read in data
@@ -40,7 +41,22 @@ data <- data %>% mutate_at(c(2, 5, 6), factor)
 data$time <- gsub("\\..*","", data$time_s)
 ```
 
+### Activity class
+
+* 1. Walking
+* 2. Descending stairs
+* 3. Ascending stairs
+* 4. Driving
+* 77. Clapping 
+* 99. Non-study activity
+
+```{r}
+table(data$activity)
+```
+
 ### Feature development
+
+Here are going to create some features to be included as predictors. These are just a few examples of what you might do. You would typically have more features and variation in your features including both time domain (shown here) and frequency domain (not shown... takes too long to run). 
 
 ```{r, warning = FALSE}
 ### Vector Magnitude
@@ -76,9 +92,16 @@ rm(data_xyz)
 
 ### Random Forest 
 
-We will use the Tidymodels framework for model fitting 
+Random forests or random decision forests is an ensemble learning method for classification, regression and other tasks that works by creating a multitude of decision trees during training. For classification tasks, the output of the random forest is the class selected by most trees. It is one of most commonly used methods for physical activity classification... though a bit old now. [https://en.wikipedia.org/wiki/Random_forest](https://en.wikipedia.org/wiki/Random_forest)
 
-#### Data split with 70/30 (Do not recommend)
+We will use the Tidymodels framework for model fitting. Good tutorials for Tidymodels are below
+
+* [https://emilhvitfeldt.github.io/ISLR-tidymodels-labs/](https://emilhvitfeldt.github.io/ISLR-tidymodels-labs/)
+* [https://lsinks.github.io/posts/2023-04-10-tidymodels/tidymodels_tutorial.html](https://lsinks.github.io/posts/2023-04-10-tidymodels/tidymodels_tutorial.html)
+
+We will use of a 5 fold cross validation and leave 2 test sets. Cross validation works as per the image below. In this example we will not finalize the analysis and run on the test set, just for the sake of time. 
+
+![](https://static.wixstatic.com/media/ea0077_8bf9cf19b5ce4f24816ac8d7a1da00fd~mv2.png/v1/fill/w_804,h_452,al_c,q_90,usm_0.66_1.00_0.01,enc_auto/Resampling_PNG.png)
 
 ```{r}
 #data <- read_csv("data_rf.csv")
@@ -103,16 +126,34 @@ test_data  <- testing(cv_split)
 table(test_data$activity)
 ```
 
-High risk of data leakage with this method. We can do k-fold cross validation to make this less likely and improve the robustness of our models. 
+High risk of data leakage with this method.
 
 ### Model 
 
-Here we use the tidy models to setup a model using `ranger` and `classification` and we call the specific model we want to fit. I'm fixing mtry = 5, min_n = 10, and tress = 10 just to make the model run more efficiently in class. Normally you want to tune these to find the optimal values. This optimization process can take a long time and is best done using parallel processing. 
+Here we use the tidy models to setup a model using `ranger` and `classification` and we call the specific model we want to fit. `ranger` is the default package but there are additional engines you could use in [tidymodels](https://parsnip.tidymodels.org/reference/rand_forest.html)
+
+* ranger
+* aorsf
+* h2o
+* partykit
+* randomForest
+* spark
+
+I'm fixing mtry = 5, min_n = 10, and tress = 10 just to make the model run more efficiently in class. These are hyperparameters for your model. 
+
+* __mtry__: An integer for the number of predictors that will be randomly sampled at each split when creating the tree models.
+* __trees__: An integer for the number of trees contained in the ensemble.
+* __min_n__: An integer for the minimum number of data points in a node that are required for the node to be split further.
+
+Normally you want to tune these to find the optimal values. This optimization process can take a long time and is best done using parallel processing. More information about model tuning using tidymodels in [this tutorial](https://juliasilge.com/blog/sf-trees-random-tuning/).
 
 ```{r}
+### Set the number of cores on your computer
 cores <- parallel::detectCores()
 cores
 ```
+
+Save the random forest model object. We set `num.threads = cores` because `ranger` will do parrallel processing so the modes will run more quickly. 
 
 ```{r}
 rf_model <- rand_forest(mtry = 5, min_n = 10, trees = 10) %>% 
@@ -124,10 +165,10 @@ rf_model <- rand_forest(mtry = 5, min_n = 10, trees = 10) %>%
 
 The recipe() function as we used it here has two arguments
 
-1. A formula. Any variable on the left-hand side of the tilde (~) is considered the model outcome (here, arr_delay). On the right-hand side of the tilde are the predictors. Variables may be listed by name, or you can use the dot (.) to indicate all other variables as predictors.
-2. The data. A recipe is associated with the data set used to create the model. This will typically be the training set, so data = train_data here. Naming a data set doesn’t actually change the data itself; it is only used to catalog the names of the variables and their types, like factors, integers, dates, etc.
+1. A formula. Any variable on the left-hand side of the tilde (~) is considered the model outcome (here, activity). On the right-hand side of the tilde are the predictors. Variables may be listed by name, or you can use the dot (.) to indicate all other variables as predictors.
+2. The data. A recipe is associated with the data set used to create the model. This will typically be the training set, so `data = train_data` here. Naming a data set doesn’t actually change the data itself; it is only used to catalog the names of the variables and their types, like factors, integers, dates, etc.
 
-Now we can add roles to this recipe. We can use the update_role() function to let recipes know that `ADM_STUDY_ID` is a variable with a custom role that we called "ID" (a role can have any character value). Whereas our formula included all variables in the training set other than bmi_recode as predictors (that's what the `.` does), this tells the recipe to keep these two variables but not use them as either outcomes or predictors.
+Now we can add roles to this recipe. We can use the `update_role()` function to let recipes know that `id` is a variable with a custom role that we called "ID" (a role can have any character value). Whereas our formula included all variables in the training set other than activity as predictors (that's what the `.` does), this tells the recipe to keep these two variables but not use them as either outcomes or predictors.
 
 ```{r}
 activity_recipe <- 
@@ -186,7 +227,7 @@ rf_auc_fit <-
 
 We can generate a confusion matrix by using the `conf_mat()` function by supplying the data frame (`rf_auc_fit`), the truth column `activity` and predicted class `.pred_class` in the estimate attribute.
 
-A confusion matrix is sort of a 2x2 table with the true values on one side and predicted values in another column. If we look on the diagonal we see when the model correctly predicts the values `yes/no` and off diagonal is when the model does not predict the correct value.
+A confusion matrix is sort of a 2x2 (or n*n table for multiclass problems) table with the true values on one side and predicted values in another column. If we look on the diagonal we see when the model correctly predicts the values `activity` and off diagonal is when the model does not predict the correct value.
 
 Here is the confusion matrix for one fold. 
 
@@ -196,6 +237,15 @@ cm <- rf_auc_fit %>%
         conf_mat(activity, .pred_class)
 cm
 ```
+
+* 1. Walking
+* 2. Descending stairs
+* 3. Ascending stairs
+* 4. Driving
+* 77. Clapping 
+* 99. Non-study activity
+
+If we look at the confusion matrix we can see that the model is overall pretty good. Lots of data on the diagonal. That said, it's also clear the we are not very good at predicting clapping (77) and walking (1) based on the confusion matrix. This tells use that we might need to think about features that could help us explain those classes. For clapping for example, we might do the rolling maximum of x, y, z over a short time window, which might help us pick out those very high values associated with clapping. 
 
 Here is the confusion matrix for all 5 of the folds. 
 
@@ -213,6 +263,38 @@ accuracy(rf_auc_fit, truth = activity,
          estimate = .pred_class)
 ```
 
+#### Sensitivity
+
+```{r}
+sens(rf_auc_fit, truth = activity,
+         estimate = .pred_class)
+```
+
+#### Specificity
+
+```{r}
+spec(rf_auc_fit, truth = activity,
+         estimate = .pred_class)
+```
+
+#### F1 Score
+
+```{r}
+f_meas(rf_auc_fit, truth = activity,
+         estimate = .pred_class)
+```
+
+## Final model
+
+Above we are looking at our trained model over the cross-validation sets. We have not actually tested our model on our test data. To run the last model we need to back to our workflow and use the `last_fit` function. Note that we use the `cv_split` object rather than the train or test data objects. This will will fit the model to the entire training set and evaluate it with the testing set. We need to back to our workflow object (somewhat counter intuitive). 
+
+```{r}
+final_rf_model <- last_fit(activity_workflow, cv_split)
+
+collect_metrics(final_rf_model)
+```
+
+Overall accuracy on the test data shows this is a pretty good model. Perhaps a bit suspect as I'm always skeptical if I see a model with 0.999 accuracy but this is a very small dataset and sort of a toy example so we are just going to leave it at this. 
 
 ```{r}
 sessionInfo()
